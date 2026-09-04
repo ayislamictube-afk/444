@@ -13,7 +13,7 @@ import importlib
 import importlib.util
 import html as html_lib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Auto install required base packages
 def install_requirements():
@@ -47,7 +47,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # আপনার টেলিগ্রাম বট টোকেন
-BOT_TOKEN = "8615086853:AAGy8aHsgupAKiIyKLIjmcQbrfctP0LAvKQ"
+BOT_TOKEN = os.environ.get("8615086853:AAGy8aHsgupAKiIyKLIjmcQbrfctP0LAvKQ", "8615086853:AAGy8aHsgupAKiIyKLIjmcQbrfctP0LAvKQ").strip()
 
 # Application directories
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +60,7 @@ TEMP_DIR = os.path.join(DATA_DIR, "temp")
 for directory in [DATA_DIR, UPLOADS_DIR, LOGS_DIR, TEMP_DIR]:
     os.makedirs(directory, exist_ok=True)
 
-START_TIME = datetime.utcnow()
+START_TIME = datetime.now(timezone.utc).replace(tzinfo=None)
 
 # Database setup
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -115,7 +115,7 @@ def add_file_record(user_id, username, filename, orig_name, path, file_type):
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO files (user_id, username, filename, orig_name, path, uploaded_at, file_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, username, filename, orig_name, path, datetime.utcnow().isoformat(), file_type)
+            (user_id, username, filename, orig_name, path, datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), file_type)
         )
         conn.commit()
         return cur.lastrowid
@@ -146,7 +146,7 @@ def record_run_start(file_id, pid, log_path):
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO runs (file_id, started_at, pid, log_path) VALUES (?, ?, ?, ?)",
-            (file_id, datetime.utcnow().isoformat(), pid, log_path)
+            (file_id, datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), pid, log_path)
         )
         conn.commit()
         return cur.lastrowid
@@ -156,7 +156,7 @@ def record_run_finish(run_id, exit_code):
         cur = conn.cursor()
         cur.execute(
             "UPDATE runs SET finished_at=?, exit_code=? WHERE id=?",
-            (datetime.utcnow().isoformat(), exit_code, run_id)
+            (datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), exit_code, run_id)
         )
         conn.commit()
 
@@ -307,6 +307,11 @@ def install_missing_imports(imports):
     return True, f"Installed: {', '.join(installed) if installed else 'None'}"
 
 # Telegram Bot Initializer
+if not BOT_TOKEN:
+    raise RuntimeError(
+        "BOT_TOKEN is missing. Add BOT_TOKEN in Render Environment Variables."
+    )
+
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
 # Main Keyboard Menu (সংশোধিত: আপডেট ও কন্টাক্ট বাটন বাদ দেওয়া হয়েছে)
@@ -345,7 +350,7 @@ def start_handler(message):
         cur = conn.cursor()
         cur.execute(
             "INSERT OR REPLACE INTO users (user_id, username, joined_at, last_seen) VALUES (?, ?, ?, ?)",
-            (user_id, user.username or "", datetime.utcnow().isoformat(), datetime.utcnow().isoformat())
+            (user_id, user.username or "", datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
         )
         conn.commit()
     
@@ -369,7 +374,7 @@ def start_handler(message):
 @bot.message_handler(func=lambda m: m.text == "⚡ Bot Speed")
 def speed_handler(message):
     cpu, memory, processes_count = get_system_load()
-    uptime_td = datetime.utcnow() - START_TIME
+    uptime_td = datetime.now(timezone.utc).replace(tzinfo=None) - START_TIME
     days = uptime_td.days
     hours, remainder = divmod(uptime_td.seconds, 3600)
     minutes, _ = divmod(remainder, 60)
@@ -769,6 +774,36 @@ def show_file_management(chat_id, file_id, user_id, message_id=None):
             bot.send_message(chat_id, text, reply_markup=kb)
     else:
         bot.send_message(chat_id, text, reply_markup=kb)
+
+# Render Web Service health server
+# Render requires a Web Service to listen on 0.0.0.0:$PORT.
+try:
+    from flask import Flask
+
+    web_app = Flask(__name__)
+
+    @web_app.get("/")
+    def health_root():
+        return "Ay Hosting Bot is running 🚀", 200
+
+    @web_app.get("/health")
+    def health_check():
+        return "OK", 200
+
+    def start_web_server():
+        port = int(os.environ.get("PORT", "10000"))
+        web_app.run(
+            host="0.0.0.0",
+            port=port,
+            debug=False,
+            use_reloader=False
+        )
+
+    threading.Thread(target=start_web_server, daemon=True).start()
+    logger.info("Render health server started on 0.0.0.0:%s", os.environ.get("PORT", "10000"))
+
+except Exception as e:
+    logger.error("Health server failed to start: %s", e)
 
 # Bot polling loop
 def start_bot():
